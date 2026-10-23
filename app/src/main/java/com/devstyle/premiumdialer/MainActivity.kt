@@ -3,7 +3,6 @@ package com.devstyle.premiumdialer
 import android.Manifest
 import android.app.role.RoleManager
 import android.content.ContentUris
-import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -12,7 +11,6 @@ import android.os.Bundle
 import android.provider.CallLog
 import android.provider.ContactsContract
 import android.provider.Settings
-import android.telecom.TelecomManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -57,6 +55,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val initialNumber = intent?.data?.schemeSpecificPart.orEmpty()
         setContent {
             MaterialTheme(
                 colorScheme = lightColorScheme(
@@ -66,15 +65,17 @@ class MainActivity : ComponentActivity() {
                 )
             ) {
                 DialerApp(
+                    initialNumber = initialNumber,
                     hasContacts = { has(Manifest.permission.READ_CONTACTS) },
                     hasCallLog = { has(Manifest.permission.READ_CALL_LOG) },
                     hasCall = { has(Manifest.permission.CALL_PHONE) },
                     requestPermissions = { perms, callback ->
-                        permissionLauncher.launch(perms)
                         pendingPermissionCallback = callback
+                        permissionLauncher.launch(perms)
                     },
                     call = { number -> placeCall(number) },
                     openContactEditor = { number -> openContactEditor(number) },
+                    openContactDetails = { id -> openContactDetails(id) },
                     loadContacts = { readContacts() },
                     loadCalls = { readCalls() },
                     requestDefault = { requestDefaultDialer() },
@@ -84,10 +85,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        recreate()
+    }
+
     private var pendingPermissionCallback: (() -> Unit)? = null
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { pendingPermissionCallback?.invoke(); pendingPermissionCallback = null }
+    ) {
+        val callback = pendingPermissionCallback
+        pendingPermissionCallback = null
+        callback?.invoke()
+    }
 
     private fun placeCall(number: String) {
         if (number.isBlank()) {
@@ -109,9 +120,13 @@ class MainActivity : ComponentActivity() {
     private fun openContactEditor(number: String) {
         val intent = Intent(Intent.ACTION_INSERT).apply {
             type = ContactsContract.Contacts.CONTENT_TYPE
-            putExtra(ContactsContract.Intents.Insert.PHONE, number)
+            if (number.isNotBlank()) putExtra(ContactsContract.Intents.Insert.PHONE, number)
         }
         startActivity(intent)
+    }
+
+    private fun openContactDetails(contactId: Long) {
+        startActivity(Intent(Intent.ACTION_VIEW, ContentUris.withAppendedId(ContactsContract.Contacts.CONTENT_URI, contactId)))
     }
 
     private fun requestDefaultDialer() {
@@ -184,19 +199,21 @@ data class RecentCall(val name: String, val number: String, val type: Int, val d
 
 @Composable
 private fun DialerApp(
+    initialNumber: String,
     hasContacts: () -> Boolean,
     hasCallLog: () -> Boolean,
     hasCall: () -> Boolean,
     requestPermissions: (Array<String>, () -> Unit) -> Unit,
     call: (String) -> Unit,
     openContactEditor: (String) -> Unit,
+    openContactDetails: (Long) -> Unit,
     loadContacts: () -> List<Person>,
     loadCalls: () -> List<RecentCall>,
     requestDefault: () -> Unit,
     openSettings: () -> Unit
 ) {
     var selectedTab by remember { mutableStateOf(0) }
-    var number by remember { mutableStateOf("") }
+    var number by remember(initialNumber) { mutableStateOf(initialNumber) }
     var search by remember { mutableStateOf("") }
     var contacts by remember { mutableStateOf(emptyList<Person>()) }
     var calls by remember { mutableStateOf(emptyList<RecentCall>()) }
@@ -204,12 +221,10 @@ private fun DialerApp(
 
     LaunchedEffect(selectedTab, refresh) {
         if (selectedTab == 1) {
-            if (!hasContacts()) requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS)) {}
-            contacts = loadContacts()
+            contacts = if (hasContacts()) loadContacts() else emptyList()
         }
         if (selectedTab == 2) {
-            if (!hasCallLog()) requestPermissions(arrayOf(Manifest.permission.READ_CALL_LOG)) {}
-            calls = loadCalls()
+            calls = if (hasCallLog()) loadCalls() else emptyList()
         }
     }
 
@@ -251,10 +266,15 @@ private fun DialerApp(
                         Text("${contacts.size} phone entries", color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
                         TextButton(onClick = { requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS)) { refresh++ } }) { Text("Refresh") }
                     }
-                    if (contacts.isEmpty()) EmptyState("No contacts shown", "Grant Contacts permission to load your phonebook.")
+                    if (!hasContacts()) {
+                        EmptyState("Contacts permission needed", "Allow access to view and search your phonebook.")
+                        OutlinedButton(onClick = { requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS)) { refresh++ } }, modifier = Modifier.fillMaxWidth()) {
+                            Icon(Icons.Default.Security, null); Spacer(Modifier.width(8.dp)); Text("Grant contacts permission")
+                        }
+                    } else if (contacts.isEmpty()) EmptyState("No contacts found", "Create a contact or check your phonebook.")
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(contacts.filter { it.name.contains(search, true) || it.number.contains(search) }) { person ->
-                            PersonRow(person) { number = person.number; selectedTab = 0 }
+                            PersonRow(person, onClick = { number = person.number; selectedTab = 0 }, onDetails = { openContactDetails(person.id) })
                         }
                     }
                     Button(onClick = { openContactEditor("") }, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), colors = ButtonDefaults.buttonColors(containerColor = DeepGreen)) {
@@ -266,7 +286,12 @@ private fun DialerApp(
                         Text("Latest calls", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                         TextButton(onClick = { requestPermissions(arrayOf(Manifest.permission.READ_CALL_LOG)) { refresh++ } }) { Text("Refresh") }
                     }
-                    if (calls.isEmpty()) EmptyState("No call history shown", "Grant Call Log permission to read recent calls.")
+                    if (!hasCallLog()) {
+                        EmptyState("Call history permission needed", "Allow access to read recent calls. Android may restrict this permission for non-default dialers.")
+                        OutlinedButton(onClick = { requestPermissions(arrayOf(Manifest.permission.READ_CALL_LOG)) { refresh++ } }, modifier = Modifier.fillMaxWidth()) {
+                            Icon(Icons.Default.Security, null); Spacer(Modifier.width(8.dp)); Text("Grant call history permission")
+                        }
+                    } else if (calls.isEmpty()) EmptyState("No recent calls found", "Your recent calls will appear here when available.")
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(calls) { item ->
                             RecentRow(item) { number = item.number; selectedTab = 0 }
@@ -380,7 +405,7 @@ private fun SearchField(value: String, onValue: (String) -> Unit, hint: String) 
 }
 
 @Composable
-private fun PersonRow(person: Person, onClick: () -> Unit) {
+private fun PersonRow(person: Person, onClick: () -> Unit, onDetails: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.White.copy(alpha = .9f))
             .clickable(onClick = onClick).padding(13.dp),
@@ -394,7 +419,7 @@ private fun PersonRow(person: Person, onClick: () -> Unit) {
             Text(person.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(person.number, color = Muted, fontSize = 13.sp)
         }
-        Icon(Icons.Default.Call, null, tint = DeepGreen)
+        IconButton(onClick = onDetails) { Icon(Icons.Default.Info, contentDescription = "Contact details", tint = DeepGreen) }
     }
 }
 
