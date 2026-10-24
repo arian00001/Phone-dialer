@@ -17,7 +17,7 @@ Native Android app starter written in Kotlin and Jetpack Compose. UI styling is 
 4. When the run succeeds, open the run and download `PremiumGlassDialer-debug-apk` under **Artifacts**.
 5. A push to `main` or `master` that changes app/build/workflow files also starts a build.
 
-The workflow uses JDK 17, Android SDK setup, Gradle 8.9, and `:app:assembleDebug`. Debug APKs are automatically signed with the debug key and do not need repository signing secrets. They are for testing, not a Play Store release.
+The workflow uses JDK 17, the Android SDK preinstalled on GitHub-hosted `ubuntu-24.04`, Gradle 8.9, and `:app:assembleDebug`. It deliberately does not call `android-actions/setup-android` or `sdkmanager`, avoiding the SDK initialization step that failed in the reported logs. It verifies that platform-tools, Android 35, and Build Tools 35.0.0 are already present before Gradle starts. Debug APKs are automatically signed with the debug key and do not need repository signing secrets. They are for testing, not a Play Store release.
 
 ## Android permissions and limitations
 - Calls use the SIM and carrier service configured on the device. `CALL_PHONE` is requested for direct calling; without it, the app opens Android's system dialer.

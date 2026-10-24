@@ -28,11 +28,11 @@ concurrency:
 jobs:
   build:
     name: Build debug APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -42,37 +42,22 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
-      # Pin the command-line tools version and explicitly use the SDK root.
-      # This avoids sdkmanager resolving packages against an unintended SDK directory.
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          cmdline-tools-version: 11076708
-          accept-android-sdk-licenses: true
-
-      - name: Verify SDK manager and install required packages
+      # GitHub-hosted Ubuntu images include the Android SDK. Do not run
+      # setup-android here: the reported failure originates inside its SDK
+      # initialization/sdmanager path before Gradle is reached.
+      - name: Verify preinstalled Android SDK packages
         shell: bash
         run: |
           set -euo pipefail
+          echo "ANDROID_HOME=$ANDROID_HOME"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          test -d "$ANDROID_SDK_ROOT"
-          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/11.0/bin/sdkmanager"
-          if [ ! -x "$SDKMANAGER" ]; then
-            SDKMANAGER="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -type f -name sdkmanager -perm -u+x | sort -V | tail -n 1)"
-          fi
-          if [ -z "${SDKMANAGER:-}" ] || [ ! -x "$SDKMANAGER" ]; then
-            echo "sdkmanager was not found under $ANDROID_SDK_ROOT/cmdline-tools" >&2
-            find "$ANDROID_SDK_ROOT/cmdline-tools" -maxdepth 3 -type f -name sdkmanager -print || true
-            exit 1
-          fi
-          echo "Using sdkmanager: $SDKMANAGER"
-          "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --version
-          yes | "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null || true
-          "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+          test -d "$ANDROID_HOME/platform-tools" || { echo "Missing platform-tools in hosted runner SDK" >&2; exit 1; }
+          test -d "$ANDROID_HOME/platforms/android-35" || { echo "Missing Android SDK platform 35 in hosted runner SDK" >&2; exit 1; }
+          test -d "$ANDROID_HOME/build-tools/35.0.0" || { echo "Missing Android Build Tools 35.0.0 in hosted runner SDK" >&2; exit 1; }
+          "$ANDROID_HOME/platform-tools/adb" version
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" version
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
@@ -94,9 +79,21 @@ jobs:
         run: gradle --no-daemon --stacktrace :app:assembleDebug
 
       - name: Upload APK artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: PremiumGlassDialer-debug-apk
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload build diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PremiumGlassDialer-build-diagnostics
+          path: |
+            app/build/reports/**
+            app/build/outputs/logs/**
+          if-no-files-found: warn
+          retention-days: 7

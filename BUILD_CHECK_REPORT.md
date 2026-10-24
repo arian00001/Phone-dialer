@@ -1,19 +1,24 @@
 # Build / Source Scan Report
 
-Date: 2026-10-23
+Date: 2026-10-24
+
+## CI workflow change
+- Removed the `android-actions/setup-android@v3` step that was failing before Gradle started.
+- Removed all `sdkmanager` invocations, including any possible attempt to resolve the deprecated `tools` package.
+- Pinned the runner to `ubuntu-24.04` and uses the Android SDK preinstalled on GitHub-hosted Ubuntu runners.
+- Added explicit checks for `platform-tools`, `platforms/android-35`, and `build-tools/35.0.0` before invoking Gradle.
+- Kept JDK 17, Gradle 8.9, `:app:assembleDebug`, APK artifact upload, and added a diagnostics artifact on failure.
 
 ## Checks performed in this environment
-- AndroidManifest.xml parsed successfully as XML.
-- Kotlin source files passed a delimiter-balance scan (braces, brackets, and parentheses).
-- Kotlin compiler was invoked as a syntax smoke check; compilation could not complete because this environment does not have Android SDK / AndroidX Compose dependencies and outbound network access is unavailable. No Kotlin `expecting` / parser diagnostics were reported.
-- GitHub Actions workflow and expected Gradle/manifest/source paths were reviewed.
+- ZIP archive integrity checked.
+- AndroidManifest.xml parsed as XML.
+- Kotlin source files passed a delimiter-balance scan.
+- Workflow structure and required project paths checked statically.
 
 ## Not verified here
-- `:app:assembleDebug` was not run successfully in this environment.
-- The generated APK was not installed on a physical phone.
-- SIM selection, incoming-call UI, contact permissions, and call-log access require real-device testing and may vary by Android version/manufacturer.
+- A GitHub Actions hosted-runner execution was not available from this environment.
+- The Gradle Android build and physical-device SIM calling tests have not been run here.
+- This ZIP therefore fixes the reported workflow design issue by bypassing the failing SDK setup action, but it cannot be honestly described as a fully verified error-free APK until a GitHub Actions run succeeds.
 
-The GitHub Actions workflow in `.github/workflows/android-apk.yml` performs the actual Android Gradle build and uploads the APK only if the build succeeds. This report deliberately does not claim a verified error-free APK before that CI run.
-
-## CI SDK setup follow-up
-The workflow now pins Android command-line tools, explicitly sets ANDROID_SDK_ROOT/ANDROID_HOME, passes --sdk_root to each sdkmanager invocation, prints the selected sdkmanager path/version, and installs platform-tools, Android 35 platform, and Build Tools 35.0.0 before Gradle runs. This addresses the reported SDK-manager configuration stage; a successful hosted Actions run is still required to verify CI and compilation end-to-end.
+## If the workflow fails again
+Open the failed Actions run and inspect the first failing step. If the hosted image does not include one of the asserted Android SDK package directories, use the runner's current preinstalled SDK package list and adjust the SDK version deliberately rather than adding the deprecated `tools` package.
